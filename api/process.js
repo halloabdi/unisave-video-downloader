@@ -1,10 +1,11 @@
 export default async function handler(req, res) {
-    // Setup CORS
+    // Setup CORS (Agar frontend bisa akses)
     res.setHeader('Access-Control-Allow-Credentials', true);
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS,PATCH,DELETE,POST,PUT');
     res.setHeader('Access-Control-Allow-Headers', 'X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version');
   
+    // Handle Preflight Options
     if (req.method === 'OPTIONS') {
       res.status(200).end();
       return;
@@ -14,7 +15,8 @@ export default async function handler(req, res) {
         return res.status(405).json({ status: 'error', message: 'Method Not Allowed' });
     }
 
-    const { url } = req.body;
+    // Ambil URL dan Tipe (Video/Audio) dari request
+    const { url, type } = req.body;
 
     if (!url) {
         return res.status(400).json({ status: 'error', message: 'URL Required' });
@@ -22,18 +24,18 @@ export default async function handler(req, res) {
 
     try {
         // --- UNIVERSAL ENGINE (COBALT) ---
-        // Mendukung: YouTube, TikTok, IG, FB, Twitter, Reddit, Soundcloud, dll.
-        
+        // Konfigurasi untuk Video vs Audio
+        const isAudioMode = type === 'audio';
+
         const cobaltData = {
             url: url,
             vCodec: "h264",
             vQuality: "720",
             aFormat: "mp3",
             filenamePattern: "classic",
-            isAudioOnly: false
+            isAudioOnly: isAudioMode // Jika true, Cobalt akan convert ke MP3
         };
 
-        // Menggunakan public instance Cobalt yang stabil
         const response = await fetch('https://api.cobalt.tools/api/json', {
             method: 'POST',
             headers: {
@@ -45,36 +47,34 @@ export default async function handler(req, res) {
 
         const data = await response.json();
 
+        // Handle Error dari Cobalt
         if (data.status === 'error') {
-            throw new Error(data.text || "Link tidak didukung atau konten private.");
+            // Cek pesan error spesifik
+            const errText = data.text || "Unknown Error";
+            if (errText.includes("YouTube")) {
+                 throw new Error("Konten YouTube ini diproteksi atau berdurasi terlalu panjang.");
+            }
+            throw new Error(errText);
         }
 
-        // Normalisasi Output agar sesuai dengan Frontend kita
-        // Cobalt outputnya bisa stream atau redirect
-        let videoUrl = data.url;
-        let audioUrl = data.url; // Cobalt biasanya kasih 1 link final
+        // Jika sukses, Cobalt mengembalikan data.url (Link Download)
+        // Jika mode audio, link tersebut adalah link MP3.
         
-        // Jika stream (YouTube biasanya stream), kita oper langsung
-        if (data.stream) {
-            videoUrl = data.url;
-        }
-
+        // Menyiapkan response
         return res.status(200).json({
             status: 'success',
             data: {
                 platform: detectPlatform(url),
-                title: data.filename || "Video Downloaded", // Cobalt kadang tidak kasih judul lengkap demi privasi
-                cover: "https://via.placeholder.com/600x400?text=Preview+Unavailable", // Cobalt hemat bandwidth tanpa thumbnail
-                author: "Universal Source",
-                video_url: videoUrl,
-                music_url: audioUrl // Dalam mode Cobalt basic, dia return sesuai request.
+                // Jika audio mode, tidak ada thumbnail, pakai placeholder
+                title: data.filename || "UniSave Download",
+                url: data.url // Ini link final (bisa video mp4 atau audio mp3)
             }
         });
 
     } catch (error) {
         return res.status(500).json({ 
             status: 'error', 
-            message: "Gagal memproses: " + error.message + ". Pastikan link publik (tidak dikunci/private)." 
+            message: "Gagal: " + error.message 
         });
     }
 }
